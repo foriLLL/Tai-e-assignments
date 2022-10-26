@@ -25,6 +25,8 @@ package pascal.taie.analysis.dataflow.analysis;
 import pascal.taie.analysis.dataflow.fact.SetFact;
 import pascal.taie.analysis.graph.cfg.CFG;
 import pascal.taie.config.AnalysisConfig;
+import pascal.taie.ir.exp.LValue;
+import pascal.taie.ir.exp.RValue;
 import pascal.taie.ir.exp.Var;
 import pascal.taie.ir.stmt.Stmt;
 
@@ -47,24 +49,47 @@ public class LiveVariableAnalysis extends
 
     @Override
     public SetFact<Var> newBoundaryFact(CFG<Stmt> cfg) {
-        // TODO - finish me
-        return null;
+        // done TODO- finish me      cfg在这里有什么用？
+        return new SetFact<>();
     }
 
     @Override
     public SetFact<Var> newInitialFact() {
-        // TODO - finish me
-        return null;
+        // done TODO - finish me
+        return new SetFact<>();
     }
 
     @Override
     public void meetInto(SetFact<Var> fact, SetFact<Var> target) {
-        // TODO - finish me
+        // done TODO - finish me
+        target.union(fact);
     }
 
+    /**
+     * @return if in(out) has changed
+     */
     @Override
     public boolean transferNode(Stmt stmt, SetFact<Var> in, SetFact<Var> out) {
-        // TODO - finish me
-        return false;
+        // done TODO
+        SetFact<Var> outCopy = out.copy();
+        if(stmt.getDef().isPresent()){
+            LValue lValue = stmt.getDef().get();
+            if(lValue instanceof Var v){
+                outCopy.remove(v);
+            }
+        }
+        for (RValue use : stmt.getUses()) {
+            if(use instanceof Var v){
+                outCopy.add(v);
+            }
+        }
+        if(!in.equals(outCopy)){
+            in.set(outCopy);
+            return true;
+        }else{
+            return false;
+        }
     }
+
+
 }
