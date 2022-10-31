@@ -26,6 +26,10 @@ import pascal.taie.analysis.dataflow.analysis.DataflowAnalysis;
 import pascal.taie.analysis.dataflow.fact.DataflowResult;
 import pascal.taie.analysis.graph.cfg.CFG;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.Queue;
+
 class WorkListSolver<Node, Fact> extends Solver<Node, Fact> {
 
     WorkListSolver(DataflowAnalysis<Node, Fact> analysis) {
@@ -34,11 +38,39 @@ class WorkListSolver<Node, Fact> extends Solver<Node, Fact> {
 
     @Override
     protected void doSolveForward(CFG<Node> cfg, DataflowResult<Node, Fact> result) {
-        // TODO - finish me
+            Queue<Node> workList = new ArrayDeque<>();
+            for (Node node : cfg) {
+                workList.add(node);
+            }
+            while(!workList.isEmpty()){
+                Node node = workList.poll();
+            for (Node pre : cfg.getPredsOf(node)) {
+                analysis.meetInto(result.getOutFact(pre), result.getInFact(node));
+            }
+            if(analysis.transferNode(node, result.getInFact(node), result.getOutFact(node))){ // 有变化
+                for (Node success : cfg.getSuccsOf(node)) {
+                    workList.offer(success);
+                }
+            }
+        }
     }
 
     @Override
     protected void doSolveBackward(CFG<Node> cfg, DataflowResult<Node, Fact> result) {
-        // TODO - finish me
+        Deque<Node> workList = new ArrayDeque<>();
+        for (Node node : cfg) {
+            workList.offerFirst(node);
+        }
+        while (!workList.isEmpty()) {
+            Node node = workList.pollFirst();
+            for (Node success : cfg.getSuccsOf(node)) {
+                analysis.meetInto(result.getInFact(success), result.getOutFact(node));
+            }
+            if (analysis.transferNode(node, result.getInFact(node), result.getOutFact(node))) { // 有变化
+                for (Node pre : cfg.getPredsOf(node)) {
+                    workList.offerFirst(pre);
+                }
+            }
+        }
     }
 }

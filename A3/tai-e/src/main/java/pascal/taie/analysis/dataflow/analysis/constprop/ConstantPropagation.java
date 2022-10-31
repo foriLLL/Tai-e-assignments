@@ -25,20 +25,11 @@ package pascal.taie.analysis.dataflow.analysis.constprop;
 import pascal.taie.analysis.dataflow.analysis.AbstractDataflowAnalysis;
 import pascal.taie.analysis.graph.cfg.CFG;
 import pascal.taie.config.AnalysisConfig;
-import pascal.taie.ir.IR;
-import pascal.taie.ir.exp.ArithmeticExp;
-import pascal.taie.ir.exp.BinaryExp;
-import pascal.taie.ir.exp.BitwiseExp;
-import pascal.taie.ir.exp.ConditionExp;
-import pascal.taie.ir.exp.Exp;
-import pascal.taie.ir.exp.IntLiteral;
-import pascal.taie.ir.exp.ShiftExp;
-import pascal.taie.ir.exp.Var;
+import pascal.taie.ir.exp.*;
 import pascal.taie.ir.stmt.DefinitionStmt;
 import pascal.taie.ir.stmt.Stmt;
 import pascal.taie.language.type.PrimitiveType;
 import pascal.taie.language.type.Type;
-import pascal.taie.util.AnalysisException;
 
 public class ConstantPropagation extends
         AbstractDataflowAnalysis<Stmt, CPFact> {
@@ -56,33 +47,74 @@ public class ConstantPropagation extends
 
     @Override
     public CPFact newBoundaryFact(CFG<Stmt> cfg) {
-        // TODO - finish me
-        return null;
+        CPFact cpFact = new CPFact();
+        for (Var param : cfg.getIR().getParams()) {
+            if(canHoldInt(param))
+                cpFact.update(param, Value.getNAC());
+        }
+        return cpFact;
     }
+
 
     @Override
     public CPFact newInitialFact() {
-        // TODO - finish me
-        return null;
+        return new CPFact();
     }
 
     @Override
     public void meetInto(CPFact fact, CPFact target) {
-        // TODO - finish me
+        fact.entries().forEach(varValueEntry -> {
+            Var key = varValueEntry.getKey();
+            Value value = varValueEntry.getValue();
+            Value targetValue = target.get(key);    // UNDEF is absent
+            target.update(key, meetValue(value, targetValue));
+        });
     }
 
     /**
      * Meets two Values.
      */
     public Value meetValue(Value v1, Value v2) {
-        // TODO - finish me
-        return null;
+        if (v1.isNAC() || v2.isNAC()) {
+            return Value.getNAC();
+        }
+
+        if (v1.isConstant() && v2.isConstant()) {
+            if (v1.equals(v2)) {// equals 重写为 kind 相同且 值相同
+                return v1;
+            } else {
+                return Value.getNAC();
+            }
+        }
+
+
+        if (v1.isConstant() || v2.isConstant()) {
+            if (v1.isConstant()) return v1;
+            return v2;
+        }
+
+        return Value.getUndef();
+
     }
 
     @Override
     public boolean transferNode(Stmt stmt, CPFact in, CPFact out) {
-        // TODO - finish me
-        return false;
+        boolean change = false;
+
+        for(Var key : in.keySet()){
+            change |= out.update(key, in.get(key));
+        }
+
+        if(stmt instanceof DefinitionStmt<?, ?> def){
+            LValue left = def.getLValue();
+            if(left instanceof Var x){
+                if(canHoldInt(x)){
+                    Value res = evaluate(def.getRValue(), in);
+                    change |= out.update(x, res);
+                }
+            }
+        }
+        return change;
     }
 
     /**
@@ -111,7 +143,66 @@ public class ConstantPropagation extends
      * @return the resulting {@link Value}
      */
     public static Value evaluate(Exp exp, CPFact in) {
-        // TODO - finish me
-        return null;
+        if (exp instanceof Var v) {
+            return in.get(v);
+        }
+
+        if (exp instanceof IntLiteral i) {
+            return Value.makeConstant(i.getValue());
+        }
+
+        if (!(exp instanceof BinaryExp b)){
+            return Value.getNAC();
+        }
+
+        Value operand1 = in.get(b.getOperand1());
+        Value operand2 = in.get(b.getOperand2());
+        String operator = b.getOperator().toString();
+
+        if(operand2.isConstant()
+                &&
+                operand2.getConstant() == 0
+                &&
+                ( operator.equals("/") || operator.equals("%") )
+        ){
+            return Value.getUndef();
+        }
+
+        if (operand1.isNAC() || operand2.isNAC()) {
+            return Value.getNAC();
+        }
+
+        if (operand1.isConstant() && operand2.isConstant()) {
+            int i1 = operand1.getConstant(), i2 = operand2.getConstant();
+            int intValue = switch (operator) {
+                case "+" -> i1 + i2;
+                case "-" -> i1 - i2;
+                case "*" -> i1 * i2;
+                case "/" -> i1 / i2;
+                case "%" -> i1 % i2;
+                case "==" -> bool2int(i1 == i2);
+                case "!=" -> bool2int(i1 != i2);
+                case "<" -> bool2int(i1 < i2);
+                case ">" -> bool2int(i1 > i2);
+                case "<=" -> bool2int(i1 <= i2);
+                case ">=" -> bool2int(i1 >= i2);
+
+                case "<<" -> i1 << i2;
+                case ">>" -> i1 >> i2;
+                case ">>>" -> i1 >>> i2;
+
+                case "|" -> i1 | i2;
+                case "&" -> i1 & i2;
+                case "^" -> i1 ^ i2;
+                default -> throw new IllegalStateException("非法操作符");
+            };
+            return Value.makeConstant(intValue);
+        } else {
+            return Value.getUndef();
+        }
+    }
+
+    private static int bool2int(boolean b) {
+        return b ? 1 : 0;
     }
 }

@@ -45,9 +45,7 @@ import pascal.taie.ir.stmt.If;
 import pascal.taie.ir.stmt.Stmt;
 import pascal.taie.ir.stmt.SwitchStmt;
 
-import java.util.Comparator;
-import java.util.Set;
-import java.util.TreeSet;
+import java.util.*;
 
 public class DeadCodeDetection extends MethodAnalysis {
 
@@ -70,6 +68,69 @@ public class DeadCodeDetection extends MethodAnalysis {
         // keep statements (dead code) sorted in the resulting set
         Set<Stmt> deadCode = new TreeSet<>(Comparator.comparing(Stmt::getIndex));
         // TODO - finish me
+
+        Queue<Stmt> queue = new ArrayDeque<>(); // BFS
+        queue.offer(cfg.getEntry());
+
+        deadCode.addAll(cfg.getNodes());     // 先假设都不可达
+        deadCode.remove(cfg.getExit());
+        while(!queue.isEmpty()){
+            Stmt stmt = queue.poll();
+            if(!deadCode.contains(stmt)){
+                continue;
+            }
+
+            if(stmt instanceof If ifStmt){
+                deadCode.remove(ifStmt);
+                Value condition = ConstantPropagation.evaluate(ifStmt.getCondition(), constants.getInFact(ifStmt));
+                if(condition.isConstant()) {
+                    int conditionRes = condition.getConstant();
+                    Edge.Kind edge2go = conditionRes == 1 ? Edge.Kind.IF_TRUE : Edge.Kind.IF_FALSE;
+
+                    // 将要走的分支加入queue 并从 dead 中删除
+                    cfg.getOutEdgesOf(ifStmt)
+                            .stream().filter(e -> e.getKind() == edge2go)
+                            .findFirst().ifPresent(edge -> {
+                                Stmt edgeTarget = edge.getTarget();
+                                queue.offer(edgeTarget);
+                            });
+                    continue;
+                }
+            }else if(stmt instanceof SwitchStmt switchStmt){
+                deadCode.remove(switchStmt);
+                Value condition = constants.getInFact(switchStmt).get(switchStmt.getVar());
+                if(condition.isConstant()){
+                    // 是常数，从edges找对应，找不到就是default
+                    int conditionValue = condition.getConstant();
+                    Stmt target;
+                    Optional<Edge<Stmt>> optionalEdge = cfg.getOutEdgesOf(switchStmt).stream()
+                            .filter(Edge::isSwitchCase)
+                            .filter(e -> e.getCaseValue() == conditionValue)
+                            .findFirst();
+                    if(optionalEdge.isPresent()){
+                        target = optionalEdge.get().getTarget();
+                    }else{
+                        // default
+                        target = switchStmt.getDefaultTarget();
+                    }
+                    queue.offer(target);
+                    continue;
+                }
+            }else if(stmt instanceof AssignStmt<?, ?> assignStmt){
+                if(hasNoSideEffect(assignStmt.getRValue())
+                        && assignStmt.getLValue() instanceof Var lVar
+                        && !liveVars.getOutFact(assignStmt).contains(lVar)){
+                    // 没有副作用 且 不被需要
+                    queue.addAll(cfg.getSuccsOf(stmt));
+                    continue;
+                }
+            }
+            deadCode.remove(stmt);
+            queue.addAll(cfg.getSuccsOf(stmt));
+        }
+
+        System.out.println(deadCode);
+
         // Your task is to recognize dead code in ir and add it to deadCode
         return deadCode;
     }
