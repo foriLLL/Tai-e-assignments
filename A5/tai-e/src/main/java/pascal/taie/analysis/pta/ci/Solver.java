@@ -26,6 +26,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import pascal.taie.World;
 import pascal.taie.analysis.graph.callgraph.CallGraphs;
+import pascal.taie.analysis.graph.callgraph.CallKind;
 import pascal.taie.analysis.graph.callgraph.DefaultCallGraph;
 import pascal.taie.analysis.graph.callgraph.Edge;
 import pascal.taie.analysis.pta.core.heap.HeapModel;
@@ -136,8 +137,10 @@ class Solver {
         public Void visit(Invoke invokeStmt){
             if(invokeStmt.isStatic()) {
                 JMethod staticMethod = resolveCallee(null, invokeStmt);
-                addReachable(staticMethod);
-                csParamReturn(invokeStmt, staticMethod);
+                if(callGraph.addEdge(new Edge<>(CallKind.STATIC, invokeStmt, staticMethod))) {
+                    addReachable(staticMethod);
+                    csParamReturn(invokeStmt, staticMethod);
+                }
             }
             return null;
         }
