@@ -43,7 +43,8 @@ public class _1ObjSelector implements ContextSelector {
     @Override
     public Context selectContext(CSCallSite callSite, JMethod callee) {
         // 静态调用
-        return getEmptyContext();
+//        return getEmptyContext();
+        return callSite.getContext();
         // TODO - finish me
     }
 
