@@ -22,10 +22,14 @@
 
 package pascal.taie.analysis.dataflow.inter;
 
+import pascal.taie.analysis.dataflow.analysis.constprop.CPFact;
 import pascal.taie.analysis.dataflow.fact.DataflowResult;
 import pascal.taie.analysis.graph.icfg.ICFG;
+import pascal.taie.analysis.graph.icfg.ICFGEdge;
+import pascal.taie.ir.stmt.Stmt;
 import pascal.taie.util.collection.SetQueue;
 
+import java.util.LinkedList;
 import java.util.Queue;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -58,11 +62,52 @@ class InterSolver<Method, Node, Fact> {
         return result;
     }
 
+    public CPFact getStmtInFact(Node stmt){
+        return (CPFact) result.getInFact(stmt);
+    }
+
+    public void add2worklist(Node node) {
+        workList.add(node);
+    }
+
     private void initialize() {
+        workList = new LinkedList<>();
+
         // TODO - finish me
+        Set<Node> entries = icfg.entryMethods().map(icfg::getEntryOf)
+                .collect(Collectors.toSet());
+
+        for (Node node : icfg) {
+            if (entries.contains(node)) { // note forward analysis here
+                result.setInFact(node, analysis.newBoundaryFact(node));
+                result.setOutFact(node, analysis.newBoundaryFact(node));
+            } else {
+                result.setInFact(node, analysis.newInitialFact());
+                result.setOutFact(node, analysis.newInitialFact());
+            }
+        }
     }
 
     private void doSolve() {
         // TODO - finish me
+        for (Node node : icfg) {
+            workList.add(node);
+        }
+
+        while (!workList.isEmpty()) {
+            Node node = workList.poll();
+            Fact in = result.getInFact(node);
+            Fact out = result.getOutFact(node);
+
+            // meet all incoming edges
+            for (ICFGEdge<Node> inEdge : icfg.getInEdgesOf(node)) {
+                analysis.meetInto(analysis.transferEdge(inEdge, result.getOutFact(inEdge.getSource())), in);    // refresh inFact
+            }
+            if (analysis.transferNode(node, in, out)) { // 有变化
+                for (Node success : icfg.getSuccsOf(node)) {
+                    workList.offer(success);
+                }
+            }
+        }
     }
 }
