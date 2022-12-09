@@ -58,6 +58,7 @@ public class InterConstantPropagation extends
 
     // ********
     private Map<JField, Set<StoreField>> staticFieldWithMetStoreFields;
+    private Map<JField, Set<LoadField>> staticFieldWithMetLoadFields;
     private Map<Var, Set<Var>> aliases;
     private PointerAnalysisResult pta;
 
@@ -72,6 +73,7 @@ public class InterConstantPropagation extends
         PointerAnalysisResult pta = World.get().getResult(ptaId);
         // You can do initialization work here
         this.pta = pta;
+        this.staticFieldWithMetLoadFields = new HashMap<>();
         this.staticFieldWithMetStoreFields = new HashMap<>();
         this.aliases = new HashMap<>();
 
@@ -102,6 +104,21 @@ public class InterConstantPropagation extends
 
             }
         }
+
+        // establish staticFieldWithMetLoadFields
+        for (Stmt stmt : icfg) {
+            if (stmt instanceof LoadField loadFieldStmt && loadFieldStmt.isStatic()) {
+                //static field load
+                JField staticField = loadFieldStmt.getFieldRef().resolve();
+                if (staticFieldWithMetLoadFields.containsKey(staticField)) {
+                    staticFieldWithMetLoadFields.get(staticField).add(loadFieldStmt);
+                } else {
+                    staticFieldWithMetLoadFields.put(staticField, new HashSet<>(Set.of(loadFieldStmt)));
+                }
+
+            }
+        }
+
 
     }
 
@@ -157,30 +174,55 @@ public class InterConstantPropagation extends
     @Override
     protected boolean transferNonCallNode(Stmt stmt, CPFact in, CPFact out) {
         // TODO - finish me
-        boolean change = false;
+        boolean ifChanged = false;
 
         for (Var key : in.keySet()) { // transfer in to out
-            change |= out.update(key, in.get(key));
+            ifChanged |= out.update(key, in.get(key));
         }
 
-        if (stmt instanceof LoadField loadFieldStmt) {
+        if(stmt instanceof StoreField storeFieldStmt) {
+            if(!cp.canHoldInt(storeFieldStmt.getRValue())) {
+                return ifChanged;
+            }
+            JField field = storeFieldStmt.getFieldRef().resolve();
+            if (storeFieldStmt.isStatic()) { //  static T.f = a
+                staticFieldWithMetLoadFields.get(field).forEach(solver::add2worklist);
+            } else {     // instance
+                Var baseVar = ((InstanceFieldAccess) storeFieldStmt.getFieldAccess()).getBase();
+                if(!aliases.containsKey(baseVar)){
+                    aliases.put(baseVar, new HashSet<>());
+                }
+                for (Var alias : aliases.get(baseVar)) {
+                    for (LoadField loadFieldStmt : alias.getLoadFields()) {
+                        if (loadFieldStmt.getFieldRef().resolve().equals(field)) {
+                            solver.add2worklist(loadFieldStmt);
+                        }
+                    }
+                }
+            }
+
+            // 好像return什么都行
+            return true;
+        }
+        else if (stmt instanceof LoadField loadFieldStmt) {
+            if(!ConstantPropagation.canHoldInt(loadFieldStmt.getLValue())){
+                return ifChanged;
+            }
             if (loadFieldStmt.isStatic()) {     // static, x = T.f
                 Var lVar = loadFieldStmt.getLValue();
                 JField field = loadFieldStmt.getFieldRef().resolve();
                 Value metValue = staticFieldWithMetStoreFields.get(field).stream()
                         .map(relatedStoreStmt -> {
-//                            System.out.println("*********" + solver.getStmtInFact(relatedStoreStmt).get(relatedStoreStmt.getRValue()));
-                            solver.add2worklist(relatedStoreStmt);
                             return solver.getStmtInFact(relatedStoreStmt).get(relatedStoreStmt.getRValue());
                         })
                         .reduce(cp::meetValue)
                         .orElseGet(Value::getUndef);
-                return out.update(lVar, metValue) || change;
+                return out.update(lVar, metValue) || ifChanged;
             } else {    // instance     x = a.f
                 InstanceFieldAccess instanceFieldAccess = (InstanceFieldAccess) loadFieldStmt.getFieldAccess();
                 Var baseVar = instanceFieldAccess.getBase();
                 if (!aliases.containsKey(baseVar)) {
-                    throw new RuntimeException("找不到base变量");
+                    aliases.put(baseVar, new HashSet<>());
                 }
 
                 Value lValue = Value.getUndef();
@@ -190,21 +232,26 @@ public class InterConstantPropagation extends
                         // 判断是不是同一个field
                         if (storeField.getFieldRef().resolve().equals(loadFieldStmt.getFieldRef().resolve())) {  // bug：可以这么判断吗？
                             // 是，拿到右值 因为分析的是IR，所以不用考虑 a.f = T.f' 的情况
-                            Value valueFromAlias = in.get(storeField.getRValue());
+                            CPFact anoIn = solver.getStmtInFact(storeField);
+                            Value valueFromAlias = anoIn.get(storeField.getRValue());
                             lValue = cp.meetValue(valueFromAlias, lValue);
                         }
                         if (lValue == Value.getNAC()) break;
                     }
                     if (lValue == Value.getNAC()) break;
                 }
-                return out.update(loadFieldStmt.getLValue(), lValue) || change;
+                return out.update(loadFieldStmt.getLValue(), lValue) || ifChanged;
             }
-        } else if (stmt instanceof LoadArray loadArrayStmt) {     // x = a[i]
+        }
+        else if (stmt instanceof LoadArray loadArrayStmt) {     // x = a[i]
+            if(!cp.canHoldInt(loadArrayStmt.getLValue())) {
+                return ifChanged;
+            }
             ArrayAccess arrayAccess = loadArrayStmt.getArrayAccess();
 
             Var baseVar = arrayAccess.getBase();
             if (!aliases.containsKey(baseVar)) {
-                throw new RuntimeException("找不到base变量");
+                aliases.put(baseVar, new HashSet<>());
             }
 
             Var i = arrayAccess.getIndex();
@@ -212,23 +259,38 @@ public class InterConstantPropagation extends
             for (Var alias : aliases.get(baseVar)) {
                 for (StoreArray storeArray : alias.getStoreArrays()) {  // b[j] = y
                     Var j = storeArray.getArrayAccess().getIndex();
-                    if (checkIndexIfAlias(i, j, in)) {
-                        Value valueFromAlias = in.get(storeArray.getRValue());
+                    CPFact anoIn = solver.getStmtInFact(storeArray);
+                    if (checkIndexIfAlias(i, j, in, anoIn)) {
+                        Value valueFromAlias = anoIn.get(storeArray.getRValue());
                         lValue = cp.meetValue(valueFromAlias, lValue);
                     }
                     if (lValue == Value.getNAC()) break;
                 }
                 if (lValue == Value.getNAC()) break;
             }
-            return out.update(loadArrayStmt.getLValue(), lValue) || change;
+            return out.update(loadArrayStmt.getLValue(), lValue) || ifChanged;
+        }
+        else if (stmt instanceof StoreArray storeArrayStmt) {
+            if(!cp.canHoldInt(storeArrayStmt.getRValue())){
+                return ifChanged;
+            }
+            Var baseVar = storeArrayStmt.getArrayAccess().getBase();
+            if (!aliases.containsKey(baseVar)) {
+                aliases.put(baseVar, new HashSet<>());
+            }
+            for (Var alias : aliases.get(baseVar)) {
+                alias.getLoadArrays().forEach(solver::add2worklist);
+            }
+            // 好像return什么都行
+            return true;
         } else {
-            return cp.transferNode(stmt, in, out);  // 这里其实不用 || change
+            return cp.transferNode(stmt, in, out) || ifChanged;  // 这里其实不用 || ifChanged
         }
     }
 
-    private boolean checkIndexIfAlias(Var i, Var j, CPFact in) {
+    private boolean checkIndexIfAlias(Var i, Var j, CPFact in, CPFact anoIn) {
         Value iVal = in.get(i);
-        Value jVal = in.get(j);
+        Value jVal = anoIn.get(j);
         if (iVal == Value.getUndef() || jVal == Value.getUndef()) {
             return false;
         }

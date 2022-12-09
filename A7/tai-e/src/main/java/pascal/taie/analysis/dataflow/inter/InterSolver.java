@@ -62,8 +62,8 @@ class InterSolver<Method, Node, Fact> {
         return result;
     }
 
-    public CPFact getStmtInFact(Node stmt){
-        return (CPFact) result.getInFact(stmt);
+    public Fact getStmtInFact(Node stmt){
+        return result.getInFact(stmt);
     }
 
     public void add2worklist(Node node) {
